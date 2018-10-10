@@ -371,34 +371,40 @@ def random_effects_from_epiviz(model_context, configuration):
             rate.child_smoothings.append((location, make_smooth(configuration, smoothing_config)))
 
 
-def generate_covariate_interpolators(covariates, covar_at_dims):
+def generate_covariate_interpolators_by_sex(covariates, covar_at_dims):
     """
+    Generates an interpolator for each sex - female, male, and both sexes.
+
     Args:
+        covariates (pd.DataFrame): data for one covariate
+        covar_at_dims (dictionary): indicates if age and time are 1d (and not just a single point)
 
     Returns:
-        Dictionary of interpolators, key = x_sex
+        Dictionary of interpolators, key = x_sex (-0.5, 0, 0.5)
     """
 
     interpolators = dict()
 
-    both = 0
-    male = 0.5
     female = -0.5
+    male = 0.5
+    both = 0
 
     sex_both = set([both])
-    sex_mf = set([female, male])
+    sex_fm = set([female, male])
 
     covars_sex = set(covariates["x_sex"].unique())
 
+    # covariate is not by sex, and is identified as both_sexes
     if len(covars_sex) and covars_sex.issubset(sex_both):
 
-        interpolator = select_interpolator(covariates, covar_at_dims)
+        interpolator = select_interpolator_based_on_at_dims(covariates, covar_at_dims)
 
         interpolators[female] = interpolator
         interpolators[both] = interpolator
         interpolators[male] = interpolator
 
-    elif covars_sex.issubset(sex_mf) and covars_sex.issuperset(sex_mf):
+    # covariate is by sex, and exists for female and for male
+    elif covars_sex.issubset(sex_fm) and covars_sex.issuperset(sex_fm):
 
         covariates_f = covariates[covariates["x_sex"] == female]
         covariates_m = covariates[covariates["x_sex"] == male]
@@ -409,9 +415,9 @@ def generate_covariate_interpolators(covariates, covar_at_dims):
         covariates_both["mean_value"] = covariates_both[
             ["mean_value_x", "mean_value_y"]].mean(axis=1)
 
-        interpolator_f = select_interpolator(covariates_f, covar_at_dims)
-        interpolator_m = select_interpolator(covariates_m, covar_at_dims)
-        interpolator_both = select_interpolator(covariates_both, covar_at_dims)
+        interpolator_f = select_interpolator_based_on_at_dims(covariates_f, covar_at_dims)
+        interpolator_m = select_interpolator_based_on_at_dims(covariates_m, covar_at_dims)
+        interpolator_both = select_interpolator_based_on_at_dims(covariates_both, covar_at_dims)
 
         interpolators[female] = interpolator_f
         interpolators[male] = interpolator_m
@@ -420,73 +426,93 @@ def generate_covariate_interpolators(covariates, covar_at_dims):
     else:
 
         raise ValueError(f"""set of sexes in covariates is {covars_sex},
-            expecting {sex_both} or {sex_mf}""")
+            expecting {sex_both} or {sex_fm}""")
 
     return interpolators
 
 
 def assign_interpolated_covariate_values(measurements, covariates):
     """
+    Compute a column of covariate values to assign to the measurements.
+
     Args:
         measurements (pd.DataFrame):
             Columns include ``age_lower``, ``age_upper``, ``time_lower``,
             ``time_upper``. All others are ignored.
         covariates (pd.DataFrame):
             Columns include ``age_lower``, ``age_upper``, ``time_lower``,
-            ``time_upper``, and ``value``.
+            ``time_upper``, ``sex``, and ``value``.
     Returns:
         pd.Series: One row for every row in the measurements.
     """
 
+    # is the covariate by_age, does it have multiple years?
     covar_at_dims = compute_covariate_age_time_dimensions(covariates)
 
-    interpolators = generate_covariate_interpolators(covariates, covar_at_dims)
+    # generate 1d or 2d interpolators by sex
+    interpolators = generate_covariate_interpolators_by_sex(covariates, covar_at_dims)
 
+    # identify the overall interval for the covariate ages, could have middle gaps
     covar_age_interval = compute_covariate_age_interval(covariates)
 
-    covariate_column = compute_interpolated_covariate_values(
+    # use interpolators to find a matching covariate value for each measurement
+    covariate_column = compute_interpolated_covariate_values_by_sex(
         measurements, interpolators, covar_at_dims, covar_age_interval)
 
     return covariate_column
 
 
-def select_interpolator(covariates, covar_at_dims):
+def select_interpolator_based_on_at_dims(covariates, covar_at_dims):
     """
+    Create a 1d or a 2d interpolator based on the dimensions of age
+    and time across the covariate data set.
+
+    Returns: scipy.interpolator.interp1d or scipy.interpolator.interp2d
     """
 
-    if covar_at_dims["age_2d"] and covar_at_dims["time_2d"]:
+    # neither age nor time are single values for entire covariate data set
+    if covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
         interpolator = interpolate.interp2d(
             covariates[["age_lower", "age_upper"]].mean(axis=1),
             covariates[["time_lower", "time_upper"]].mean(axis=1),
             covariates["mean_value"])
 
-    elif covar_at_dims["age_2d"] and not covar_at_dims["time_2d"]:
+    # time is a single value
+    elif covar_at_dims["age_1d"] and not covar_at_dims["time_1d"]:
 
         interpolator = interpolate.interp1d(
             covariates[["age_lower", "age_upper"]].mean(axis=1),
             covariates["mean_value"], bounds_error=False)
 
-    elif not covar_at_dims["age_2d"] and covar_at_dims["time_2d"]:
+    # age is a single value
+    elif not covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
         interpolator = interpolate.interp1d(
             covariates[["time_lower", "time_upper"]].mean(axis=1),
             covariates["mean_value"], bounds_error=False)
 
+    # both age and time have only one value for the entire covariate data set
     else:
-
-        raise ValueError("Neither age nor time has 2 dimensions, so don't need to interpolate.")
+        raise ValueError(f"""Both age and time have only one value for the entire
+                         covariate data set, which is unexpected.""")
 
     return interpolator
 
 
 def compute_covariate_age_time_dimensions(covariates):
+    """
+    Determines if the input covariate data is by_age and/or by_time.
+
+    Returns:
+        dictionary: keys indicate if age or time are points (0d) vs. 1d
+    """
 
     covar_at_dims = {}
 
-    covar_at_dims["age_2d"] = len(set(zip(covariates["age_lower"], covariates["age_upper"]))) > 1
+    covar_at_dims["age_1d"] = len(set(zip(covariates["age_lower"], covariates["age_upper"]))) > 1
 
-    covar_at_dims["time_2d"] = len(set(zip(covariates["time_lower"], covariates["time_upper"]))) > 1
+    covar_at_dims["time_1d"] = len(set(zip(covariates["time_lower"], covariates["time_upper"]))) > 1
 
     return covar_at_dims
 
@@ -494,15 +520,16 @@ def compute_covariate_age_time_dimensions(covariates):
 def compute_covariate_age_interval(covariates):
     """
     Create an interval expressing all the ages in the covariates data frame.
-    This allows a check like: 9.5 in age_interval
+    If the covariates have age ranges like: [5,10], [10,15], [30,35], [35-80],
+    the overall age interval would be: [5,15], [30,80]
+    This allows checks like: 9.5 in age_interval (yes), 20.25 in age_interval (no),
+    0.667 in age_interval (no), 95 in age_interval (no), 50.1 in age_interval (yes)
 
     Returns:
-        Interval of ages in the covariates data frame
+        Interval: of ages in the covariates data frame
     """
     age_interval = it.empty()
 
-    # issue: [5,9], [10,14] or [5,10], [10,15], need the latter
-    # may need to add one to age_upper
     age_groups = set(zip(covariates["age_lower"], covariates["age_upper"]))
 
     for age in age_groups:
@@ -511,8 +538,15 @@ def compute_covariate_age_interval(covariates):
     return age_interval
 
 
-def compute_interpolated_covariate_values(measurements, interpolators,
-                                          covar_at_dims, covar_age_interval):
+def compute_interpolated_covariate_values_by_sex(
+        measurements, interpolators, covar_at_dims, covar_age_interval):
+    """
+    Use the measurements data by sex as input to the corresponding interpolator
+    to assign a covariate value to the measurement.
+
+    Returns:
+        pd.Series: One row for every row in the measurements.
+    """
 
     female = -0.5
     male = 0.5
@@ -526,7 +560,8 @@ def compute_interpolated_covariate_values(measurements, interpolators,
     index_m = measurements_m.index
     index_both = measurements_both.index
 
-    if covar_at_dims["age_2d"] and covar_at_dims["time_2d"]:
+    # covariate is by_age and "by_time"
+    if covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
         covariate_f = interpolators[female](
             measurements_f[["age_lower", "age_upper"]].mean(axis=1),
@@ -540,7 +575,8 @@ def compute_interpolated_covariate_values(measurements, interpolators,
             measurements_both[["age_lower", "age_upper"]].mean(axis=1),
             measurements_both[["time_lower", "time_upper"]].mean(axis=1))
 
-    elif covar_at_dims["age_2d"] and not covar_at_dims["time_2d"]:
+    # covariate is by_age, but not "by_time"
+    elif covar_at_dims["age_1d"] and not covar_at_dims["time_1d"]:
 
         covariate_f = interpolators[female](
             measurements_f[["age_lower", "age_upper"]].mean(axis=1))
@@ -551,7 +587,8 @@ def compute_interpolated_covariate_values(measurements, interpolators,
         covariate_both = interpolators[both](
             measurements_both[["age_lower", "age_upper"]].mean(axis=1))
 
-    elif not covar_at_dims["age_2d"] and covar_at_dims["time_2d"]:
+    # covariate is "by_time", but not by_age
+    elif not covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
         covariate_f = interpolators[female](
             measurements_f[["time_lower", "time_upper"]].mean(axis=1))
@@ -564,6 +601,8 @@ def compute_interpolated_covariate_values(measurements, interpolators,
 
     cov_col = []
     cov_index = []
+
+    # the return data from interp1d is 1d array, and 2d array from interp2d
 
     if covariate_f.ndim == 1:
         cov_f = covariate_f
@@ -595,8 +634,9 @@ def compute_interpolated_covariate_values(measurements, interpolators,
     covariate_column = pd.Series(cov_col, index=cov_index).sort_index()
 
     # set missings using covar_age_interval
+
     meas_mean_age = measurements[["age_lower", "age_upper"]].mean(axis=1)
-    mean_age_in_age_interval = [i in covar_age_interval for i in meas_mean_age]
-    covariate_column = pd.Series(np.where(mean_age_in_age_interval, covariate_column, np.nan))
+    meas_mean_age_in_age_interval = [i in covar_age_interval for i in meas_mean_age]
+    covariate_column = pd.Series(np.where(meas_mean_age_in_age_interval, covariate_column, np.nan))
 
     return covariate_column

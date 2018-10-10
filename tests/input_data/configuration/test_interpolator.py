@@ -8,6 +8,12 @@ from cascade.input_data.configuration.builder import assign_interpolated_covaria
 
 @pytest.fixture
 def measurements_1():
+    """
+    Age and time ranges and sex values as seen in a particular measurements data set,
+    notice that the ranges aren't regular, and the sexes aren't either (female and male) or
+    (both) only, and aren't balanced.  The 1978 values will be out-of-time-range for the
+    covariates fixture data.
+    """
     measurements_1 = pd.DataFrame()
     measurements_1["age_lower"] = [0, 0, 0, 25, 25, 35, 0, 45, 45]
     measurements_1["age_upper"] = [18, 18, 18, 44, 34, 44, 99, 54, 54]
@@ -20,6 +26,9 @@ def measurements_1():
 
 @pytest.fixture
 def measurements_2():
+    """
+    Similar to measurements_1, but here sex is both only.
+    """
     measurements_2 = pd.DataFrame()
     measurements_2["age_lower"] = [0, 0, 0, 25, 25, 35, 0, 45, 45]
     measurements_2["age_upper"] = [18, 18, 18, 44, 34, 44, 99, 54, 54]
@@ -32,6 +41,9 @@ def measurements_2():
 
 @pytest.fixture
 def covariates_1():
+    """
+    covariates have: one age group, many years (1990-2017), sex = both
+    """
     covariates_1 = pd.DataFrame()
     covariates_1["age_lower"] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -57,6 +69,9 @@ def covariates_1():
 
 @pytest.fixture
 def covariates_2():
+    """
+    covariates have: one age group, many years (1990-2017), sex = female, male
+    """
     covariates_2 = pd.DataFrame()
     covariates_2["age_lower"] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -100,6 +115,9 @@ def covariates_2():
 
 @pytest.fixture
 def covariates_3():
+    """
+    covariates have: two age groups, many years (1990-2017), sex = both
+    """
     covariates_3 = pd.DataFrame()
     covariates_3["age_lower"] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
                                  0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
@@ -143,7 +161,7 @@ def covariates_3():
 
 @pytest.fixture
 def covariate_column_1():
-
+    """Expected output"""
     covariate_column_1 = pd.Series([0.0, 0.0, np.nan, 0.0, np.nan, 0.0, 0.0, 0.0, 0.0],
                                    index=[4, 5, 8, 3, 7, 0, 1, 2, 6])
 
@@ -152,7 +170,7 @@ def covariate_column_1():
 
 @pytest.fixture
 def covariate_column_2():
-
+    """Expected output"""
     covariate_column_2 = pd.Series([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, np.nan, np.nan],
                                    index=[0, 1, 2, 3, 4, 5, 6, 7, 8])
 
@@ -161,7 +179,7 @@ def covariate_column_2():
 
 @pytest.fixture
 def covariate_column_3():
-
+    """Expected output"""
     covariate_column_3 = pd.Series([np.nan, 2.338462, 1.723077, 2.646154,
                                     1.723077, 4.000000, 4.000000, 4.000000,
                                     1.723077],
@@ -171,6 +189,10 @@ def covariate_column_3():
 
 
 def test_assign_interpolated_covariate_values_sex_both_1d(measurements_1, covariates_1, covariate_column_1):
+    """
+    covariates have multiple time values, only one age group, and only both_sexes (no female, no male)
+    measurements have all three sexes (female, male, both), and multiple age groups and time values
+    """
 
     cov_col = assign_interpolated_covariate_values(measurements_1, covariates_1)
 
@@ -182,6 +204,10 @@ def test_assign_interpolated_covariate_values_sex_both_1d(measurements_1, covari
 
 
 def test_assign_interpolated_covariate_values_sex_mf_1d(measurements_2, covariates_2, covariate_column_2):
+    """
+    covariates have multiple time values, only one age group, and two sexes (female, male)
+    measurements have only both_sexes (no female, no male), and multiple age groups and time values
+    """
 
     cov_col = assign_interpolated_covariate_values(measurements_2, covariates_2)
 
@@ -193,6 +219,11 @@ def test_assign_interpolated_covariate_values_sex_mf_1d(measurements_2, covariat
 
 
 def test_assign_interpolated_covariate_values_sex_both_2d(measurements_1, covariates_3, covariate_column_3):
+    """
+    covariates have multiple time values, two age groups, and only both_sexes (no female, no male)
+    measurements have all three sexes (female, male, both), and multiple age groups and time values
+    measurements have one age group which is missing from the middle of the covariate overall age interval
+    """
 
     cov_col = assign_interpolated_covariate_values(measurements_1, covariates_3)
 
