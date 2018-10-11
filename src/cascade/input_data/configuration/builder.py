@@ -556,80 +556,54 @@ def compute_interpolated_covariate_values_by_sex(
     measurements_m = measurements[measurements["x_sex"] == male]
     measurements_both = measurements[measurements["x_sex"] == both]
 
-    index_f = measurements_f.index
-    index_m = measurements_m.index
-    index_both = measurements_both.index
+    index_f = measurements_f.index.tolist()
+    index_m = measurements_m.index.tolist()
+    index_both = measurements_both.index.tolist()
 
     # covariate is by_age and "by_time"
     if covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
-        covariate_f = interpolators[female](
-            measurements_f[["age_lower", "age_upper"]].mean(axis=1),
-            measurements_f[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_f = [interpolators[female](age, time)[0] for age, time in
+                       zip(measurements_f[["age_lower", "age_upper"]].mean(axis=1),
+                           measurements_f[["time_lower", "time_upper"]].mean(axis=1))]
 
-        covariate_m = interpolators[male](
-            measurements_m[["age_lower", "age_upper"]].mean(axis=1),
-            measurements_m[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_m = [interpolators[male](age, time)[0] for age, time in
+                       zip(measurements_m[["age_lower", "age_upper"]].mean(axis=1),
+                           measurements_m[["time_lower", "time_upper"]].mean(axis=1))]
 
-        covariate_both = interpolators[both](
-            measurements_both[["age_lower", "age_upper"]].mean(axis=1),
-            measurements_both[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_both = [interpolators[both](age, time)[0] for age, time in
+                          zip(measurements_both[["age_lower", "age_upper"]].mean(axis=1),
+                              measurements_both[["time_lower", "time_upper"]].mean(axis=1))]
 
     # covariate is by_age, but not "by_time"
     elif covar_at_dims["age_1d"] and not covar_at_dims["time_1d"]:
 
-        covariate_f = interpolators[female](
-            measurements_f[["age_lower", "age_upper"]].mean(axis=1))
+        covariate_f = [interpolators[female](age).item()
+                       for age in measurements_f[["age_lower", "age_upper"]].mean(axis=1)]
 
-        covariate_m = interpolators[male](
-            measurements_m[["age_lower", "age_upper"]].mean(axis=1))
+        covariate_m = [interpolators[male](age).item()
+                       for age in measurements_m[["age_lower", "age_upper"]].mean(axis=1)]
 
-        covariate_both = interpolators[both](
-            measurements_both[["age_lower", "age_upper"]].mean(axis=1))
+        covariate_both = [interpolators[both](age).item()
+                          for age in measurements_both[["age_lower", "age_upper"]].mean(axis=1)]
 
     # covariate is "by_time", but not by_age
     elif not covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
-        covariate_f = interpolators[female](
-            measurements_f[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_f = [interpolators[female](time).item()
+                       for time in measurements_f[["time_lower", "time_upper"]].mean(axis=1)]
 
-        covariate_m = interpolators[male](
-            measurements_m[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_m = [interpolators[male](time).item()
+                       for time in measurements_m[["time_lower", "time_upper"]].mean(axis=1)]
 
-        covariate_both = interpolators[both](
-            measurements_both[["time_lower", "time_upper"]].mean(axis=1))
+        covariate_both = [interpolators[both](time).item()
+                          for time in measurements_both[["time_lower", "time_upper"]].mean(axis=1)]
 
     cov_col = []
     cov_index = []
 
-    # the return data from interp1d is 1d array, and 2d array from interp2d
-
-    if covariate_f.ndim == 1:
-        cov_f = covariate_f
-        cov_col = cov_col + list(cov_f)
-        cov_index = cov_index + list(index_f)
-    elif covariate_f.ndim == 2:
-        cov_f = covariate_f[0]
-        cov_col = cov_col + list(cov_f)
-        cov_index = cov_index + list(index_f)
-
-    if covariate_m.ndim == 1:
-        cov_m = covariate_m
-        cov_col = cov_col + list(cov_m)
-        cov_index = cov_index + list(index_m)
-    elif covariate_m.ndim == 2:
-        cov_m = covariate_m[0]
-        cov_col = cov_col + list(cov_m)
-        cov_index = cov_index + list(index_m)
-
-    if covariate_both.ndim == 1:
-        cov_both = covariate_both
-        cov_col = cov_col + list(cov_both)
-        cov_index = cov_index + list(index_both)
-    elif covariate_both.ndim == 2:
-        cov_both = covariate_both[0]
-        cov_col = cov_col + list(cov_both)
-        cov_index = cov_index + list(index_both)
+    cov_col = covariate_f + covariate_m + covariate_both
+    cov_index = index_f + index_m + index_both
 
     covariate_column = pd.Series(cov_col, index=cov_index).sort_index()
 

@@ -196,10 +196,6 @@ def test_assign_interpolated_covariate_values_sex_both_1d(measurements_1, covari
 
     cov_col = assign_interpolated_covariate_values(measurements_1, covariates_1)
 
-    print(f"cov_col shape: {cov_col.shape}")
-    print(f"cov_col: \n{cov_col}")
-    print(f"cov_col 1: \n{covariate_column_1}")
-
     pd.testing.assert_series_equal(covariate_column_1, cov_col)
 
 
@@ -210,10 +206,6 @@ def test_assign_interpolated_covariate_values_sex_mf_1d(measurements_2, covariat
     """
 
     cov_col = assign_interpolated_covariate_values(measurements_2, covariates_2)
-
-    print(f"cov_col shape: {cov_col.shape}")
-    print(f"cov_col: \n{cov_col}")
-    print(f"cov col 2: \n{covariate_column_2}")
 
     pd.testing.assert_series_equal(covariate_column_2, cov_col)
 
@@ -226,9 +218,5 @@ def test_assign_interpolated_covariate_values_sex_both_2d(measurements_1, covari
     """
 
     cov_col = assign_interpolated_covariate_values(measurements_1, covariates_3)
-
-    print(f"\ncov_col shape: {cov_col.shape}")
-    print(f"cov_col: \n{cov_col}")
-    print(f"cov col 3: \n{covariate_column_3}")
 
     pd.testing.assert_series_equal(covariate_column_3, cov_col, check_exact=False)
