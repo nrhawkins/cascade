@@ -2,7 +2,6 @@
 This describes the tables in the sqlite file that Dismod reads.
 """
 import enum
-import logging
 
 import numpy as np
 
@@ -11,8 +10,8 @@ from sqlalchemy import Column, Integer, String, Float, Enum, ForeignKey
 from sqlalchemy import BigInteger
 from sqlalchemy.ext.compiler import compiles
 
-
-LOGGER = logging.getLogger(__name__)
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 
 # Sqlite matches names to types. Brad checks exact names against a set
@@ -534,26 +533,22 @@ class Var(Base):
     covariate_id = Column(Integer(), nullable=False)
 
 
-_TYPE_MAP = {str: String, int: Integer, float: Float, np.dtype("int64"): Integer, np.dtype("float64"): Float}
+_TYPE_MAP = {
+    np.dtype("O"): String,
+    str: String,
+    int: Integer,
+    float: Float,
+    np.dtype("int64"): Integer,
+    np.dtype("float64"): Float,
+}
 
 
-def add_columns_to_avgint_table(metadata, column_identifiers):
+def add_columns_to_table(table, column_identifiers):
     """
     Args:
         column_identifiers: dict(name -> type) where type
             is one of int, float, str
     """
-    LOGGER.debug("Adding columns to avgint table {}".format(list(column_identifiers.keys())))
+    CODELOG.debug(f"Adding columns to {table.name} table {list(column_identifiers.keys())}")
     for name, python_type in column_identifiers.items():
-        metadata.tables["avgint"].append_column(Column(name, _TYPE_MAP[python_type]()))
-
-
-def add_columns_to_data_table(metadata, column_identifiers):
-    """
-    Args:
-        column_identifiers: dict(name -> type) where type
-            is one of int, float, str
-    """
-    LOGGER.debug("Adding columns to data table {}".format(list(column_identifiers.keys())))
-    for name, python_type in column_identifiers.items():
-        metadata.tables["data"].append_column(Column(name, _TYPE_MAP[python_type]()))
+        table.append_column(Column(name, _TYPE_MAP[python_type]()))

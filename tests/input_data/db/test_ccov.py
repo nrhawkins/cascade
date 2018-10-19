@@ -3,11 +3,12 @@ import pytest
 import pandas as pd
 
 from cascade.input_data.db.ccov import country_covariates
+from cascade.testing_utilities import make_execution_context
 
 
 @pytest.fixture
-def mock_get_covariate_estimates(mocker):
-    return mocker.patch("cascade.input_data.db.ccov.get_covariate_estimates")
+def mock_db_queries(mocker):
+    return mocker.patch("cascade.input_data.db.ccov.db_queries")
 
 
 @pytest.fixture
@@ -55,8 +56,9 @@ def demographics_default():
 def test_country_covariates_real(ihme, demographics_default):
 
     country_covariate_id = 26
+    gbd_round_id = 5
 
-    ccov = country_covariates(country_covariate_id, demographics_default)
+    ccov = country_covariates(country_covariate_id, demographics_default, gbd_round_id)
 
     assert set(ccov.columns) == {
         "covariate_id", "covariate_name_short", "location_id", "age_group_id", "year_id", "sex_id", "mean_value"}
@@ -82,13 +84,14 @@ def test_country_covariates_real(ihme, demographics_default):
 
 
 def test_country_covariates_mock(
-        demographics_default, mock_get_covariate_estimates,
+        demographics_default, mock_db_queries,
         mock_ccov_estimates, expected_ccov):
 
-    mock_get_covariate_estimates.return_value = mock_ccov_estimates
+    mock_db_queries.get_covariate_estimates.return_value = mock_ccov_estimates
 
     country_covariate_id = 33
+    gbd_round_id = 5
 
     pd.testing.assert_frame_equal(
-        country_covariates(country_covariate_id, demographics_default),
+        country_covariates(country_covariate_id, demographics_default, gbd_round_id),
         expected_ccov, check_like=True)

@@ -1,7 +1,6 @@
 """
 Saves results from a model fit to a database which the EpiViz can access.
 """
-import logging
 from pathlib import Path
 import tempfile
 
@@ -20,6 +19,9 @@ except ImportError:
             raise ImportError(f"Required package save_results not found")
 
     save_results_at = DummySaveResults()
+
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 DRAWS_INPUT_FILE_PATTERN = "all_draws.h5"
 
@@ -41,9 +43,6 @@ INTEGRAND_ID_TO_MEASURE_ID_DF = pd.DataFrame(
     ],
     columns=["integrand_id", "measure_id"],
 )
-
-CODELOG = logging.getLogger(__name__)
-MATHLOG = logging.getLogger(__name__)
 
 
 def _normalize_draws_df(draws_df, execution_context):
@@ -88,18 +87,12 @@ def _normalize_draws_df(draws_df, execution_context):
     draws = with_age_groups.drop(["age_group_years_start", "age_group_years_end", "age_lower", "age_upper"], "columns")
 
     node_table = execution_context.dismodfile.node
-    node_to_location = {r.node_id: int(r.node_name) for _, r in node_table.iterrows()}
+    node_to_location = {r.node_id: r.c_location_id for _, r in node_table.iterrows()}
 
     draws["location_id"] = draws.node_id.apply(lambda nid: node_to_location[nid])
 
-    # FIXME This is a placeholder because we don't have covariates yet and can't actually predict sex differences
-    male_draws = draws.copy()
-    male_draws["sex_id"] = 1
-    female_draws = draws.copy()
-    female_draws["sex_id"] = 2
-    draws = pd.concat([male_draws, female_draws])
-
-    return draws.drop(["node_id", "weight_id"], "columns")
+    draws["sex_id"] = draws.x_sex.apply(lambda x: {-0.5: 2, 0.5: 1}[x])
+    return draws.drop(["node_id", "weight_id", "x_sex"], "columns")
 
 
 def _write_temp_draws_file_and_upload_model_results(draws_df, execution_context):

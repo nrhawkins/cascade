@@ -3,6 +3,9 @@ mostly useful field types.
 """
 from cascade.core.form.abstract_form import Form, Field, SimpleTypeField, NO_VALUE
 
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
+
 
 class IntField(SimpleTypeField):
     def __init__(self, *args, **kwargs):
@@ -45,7 +48,7 @@ class FormList(Form):
 
     def validate_and_normalize(self, instance=None, root=None):
         return [
-            (f"[{i}].{p}", e) for i, form in enumerate(self) for (p, e) in form.validate_and_normalize(self, root=root)
+            (f"[{i}].{p}", f"[{i}].{h}", e) for i, form in enumerate(self) for (p, h, e) in form.validate_and_normalize(self, root=root)
         ]
 
     def __get__(self, instance, owner):

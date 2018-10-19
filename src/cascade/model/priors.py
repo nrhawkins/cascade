@@ -1,6 +1,9 @@
+from functools import total_ordering
+
 import numpy as np
 
-from functools import total_ordering
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 # TODO: Several of these prior types accept eta as a parameter and the others
 # don't use it as a parameter but use it as an offset in the optimization
@@ -52,8 +55,8 @@ class _Prior:
 
 def _validate_bounds(lower, mean, upper):
     any_nones = lower is None or mean is None or upper is None
-    any_nans = np.isnan(lower) or np.isnan(mean) or np.isnan(upper)
-    if any_nones or any_nans:
+    any_invalid = any_nones or np.isnan(lower) or np.isnan(mean) or np.isnan(upper)
+    if any_invalid:
         raise PriorError(f"Bounds contain invalid values: lower={lower} mean={mean} upper={upper}")
     if not lower <= mean <= upper:
         raise PriorError(f"Bounds are inconsistent: lower={lower} mean={mean} upper={upper}")

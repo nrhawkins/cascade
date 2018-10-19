@@ -4,16 +4,13 @@ databases directly should live outside the db package and use the functions here
 form.
 """
 
-import logging
-
 import pandas as pd
 
 from cascade.core.db import cursor, connection
+from cascade.input_data.configuration.id_map import make_integrand_map
 
-CODELOG = logging.getLogger(__name__)
-
-# FIXME: There is a shared function that get's the official mapping, I think. Or an sql query at least.
-MEASURES = {6: "incidence", 9: "mtexcess", 5: "prevalence"}
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 
 def _bundle_is_frozen(execution_context):
@@ -155,7 +152,7 @@ def _get_study_covariates(execution_context, bundle_id, tier=3):
 def _upload_bundle_data_to_tier_3(cursor, model_version_id, bundle_data):
     """Uploads bundle data to tier 3 attached to the current model_version_id.
     """
-
+    CODELOG.debug(f"Upload to tier3 {len(bundle_data)} lines to {model_version_id} mvid")
     insert_query = f"""
     INSERT INTO epi.t3_model_version_dismod (
         model_version_id,
@@ -222,7 +219,7 @@ def _upload_study_covariates_to_tier_3(cursor, model_version_id, covariate_data)
     CODELOG.debug(f"uploaded {len(covariate_data)} lines of covariate")
 
 
-def freeze_bundle(execution_context) -> bool:
+def freeze_bundle(execution_context, bundle_id=None) -> bool:
     """Freezes the bundle data attached to the current model_version_id if necessary.
 
     The freezing process works as follows:
@@ -244,7 +241,8 @@ def freeze_bundle(execution_context) -> bool:
         return False
     else:
         CODELOG.info(f"Freezing bundle data for model_version_id {model_version_id} on '{database}'")
-        bundle_id = _get_bundle_id(execution_context)
+        if bundle_id is None:
+            bundle_id = _get_bundle_id(execution_context)
         bundle_data = _get_bundle_data(execution_context, bundle_id, tier=2)
         covariate_data = _get_study_covariates(execution_context, bundle_id, tier=2)
         with cursor(execution_context) as c:
@@ -257,7 +255,16 @@ def _normalize_measures(data):
     """Transform measure_ids into canonical measure names
     """
     data = data.copy()
-    data["measure"] = data.measure_id.apply(lambda k: MEASURES[k])
+    gbd_measure_id_to_integrand = make_integrand_map()
+    if any(data.measure_id == 6):
+        MATHLOG.warn(f"Found incidence, measure_id=6, in data. Should be Tincidence or Sincidence.")
+    try:
+        data["measure"] = data.measure_id.apply(lambda k: gbd_measure_id_to_integrand[k].name)
+    except KeyError as ke:
+        raise RuntimeError(
+            f"The bundle data uses measure {str(ke)} which doesn't map "
+            f"to an integrand. The map is {gbd_measure_id_to_integrand}."
+        )
     return data
 
 
@@ -277,7 +284,7 @@ def _normalize_bundle_data(data):
 
     data = data.set_index("seq")
 
-    cols = ["measure", "mean", "sex", "standard_error", "age_start", "age_end", "year_start", "year_end"]
+    cols = ["measure", "mean", "sex", "standard_error", "age_start", "age_end", "year_start", "year_end", "location_id"]
 
     return data[cols]
 
@@ -299,6 +306,8 @@ def _covariate_ids_to_names(execution_context, study_covariates):
             covariate_mapping = dict(list(c))
 
         study_covariates["name"] = study_covariates.name.apply(covariate_mapping.get)
+    else:
+        MATHLOG.info(f"Found no study covariates to add to bundle.")
 
     return study_covariates
 

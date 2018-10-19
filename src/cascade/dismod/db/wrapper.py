@@ -4,11 +4,11 @@ Creates a file for Dismod-AT to read.
 The file format is sqlite3. This uses a local mapping of database tables
 to create it and add tables.
 """
-import logging
-
+from textwrap import dedent
 from copy import deepcopy
 from networkx import DiGraph
 from networkx.algorithms.dag import lexicographical_topological_sort
+
 import pandas as pd
 import numpy as np
 
@@ -17,11 +17,11 @@ from sqlalchemy.sql import select, text
 from sqlalchemy.exc import OperationalError, StatementError
 from sqlalchemy import Integer, String, Float, Enum
 
-from cascade.dismod.db.metadata import Base, add_columns_to_avgint_table, add_columns_to_data_table, DensityEnum
+from cascade.dismod.db.metadata import Base, add_columns_to_table, DensityEnum
 from cascade.dismod.db import DismodFileError
 
-
-LOGGER = logging.getLogger(__name__)
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 
 def _get_engine(file_path):
@@ -159,13 +159,13 @@ class DismodFile:
         self._table_definitions = self._metadata.tables
         self._table_data = {}
         self._table_hash = {}
-        LOGGER.debug(f"dmfile tables {self._table_definitions.keys()}")
+        CODELOG.debug(f"dmfile tables {self._table_definitions.keys()}")
 
     def create_tables(self, tables=None):
         """
         Make all of the tables in the metadata.
         """
-        LOGGER.debug(f"Creating table subset {tables}")
+        CODELOG.debug(f"Creating table subset {tables}")
         Base.metadata.create_all(self.engine, tables, checkfirst=False)
 
     def make_densities(self):
@@ -185,16 +185,23 @@ class DismodFile:
         new_columns = table.columns.difference(table_definition.c.keys())
         new_column_types = {c: table.dtypes[c] for c in new_columns}
 
-        bad_column_names = [c for c in new_columns if not c.startswith("x_")]
-        if bad_column_names:
-            raise ValueError(f"Covariate column names must start with 'x_'. Malformed names: {bad_column_names}")
+        allows_covariates = table_definition.name in ["avgint", "data"]
 
-        if table_definition.name == "avgint":
-            add_columns_to_avgint_table(self._metadata, new_column_types)
-        elif table_definition.name == "data":
-            add_columns_to_data_table(self._metadata, new_column_types)
-        else:
-            raise ValueError(f"Can't add columns to {table.name}")
+        good_prefixes = ["c_"]
+        if allows_covariates:
+            good_prefixes.append("x_")
+        bad_column_names = [c for c in new_columns if c[:2] not in good_prefixes]
+        if bad_column_names:
+            msg = f"""
+            Table '{table_definition.name}' has these columns {list(table_definition.c.keys())}.
+            It allows additional comment columns, which must start 'c_'."""
+            if allows_covariates:
+                msg += " In addition it allows covariate columns, which must start with 'x_'."
+            msg += f" You supplied columns that don't meet those requirements: {bad_column_names}"
+
+            raise ValueError(dedent(msg))
+
+        add_columns_to_table(table_definition, new_column_types)
 
     def refresh(self):
         """ Throw away any un-flushed changes and reread data from disk.
@@ -292,7 +299,7 @@ class DismodFile:
                         table.index = table.index.astype(np.int64)
                     try:
                         dtypes = {k: v.type for k, v in table_definition.c.items()}
-                        LOGGER.debug(f"table {table_name} types {dtypes}")
+                        CODELOG.debug(f"table {table_name} types {dtypes}")
                         table.index.name = None
                         table.to_sql(
                             table_name, connection, index_label=f"{table_name}_id", if_exists="replace", dtype=dtypes
@@ -338,7 +345,7 @@ class DismodFile:
                         if type(column_object.type) != type(expect[column_type]):  # noqa: E721
                             raise RuntimeError(f"{table_name}.{column_name} got wrong type {column_type}")
 
-                    LOGGER.debug(f"Table integrand {table_info}")
+                    CODELOG.debug(f"Table integrand {table_info}")
 
     def diagnostic_print(self):
         """

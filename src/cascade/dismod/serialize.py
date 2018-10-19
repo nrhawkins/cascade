@@ -1,11 +1,9 @@
 """
 Converts the internal representation to a Dismod File.
 """
-import logging
 from numbers import Real
 import time
 import sys
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -14,12 +12,13 @@ from cascade.dismod.db.metadata import IntegrandEnum, DensityEnum
 from cascade.dismod.db.wrapper import DismodFile
 from cascade.model.priors import Constant
 from cascade.model.grids import unique_floats
+from cascade.input_data.db.locations import get_location_hierarchy_from_gbd
+
+from cascade.core.log import getLoggers
+CODELOG, MATHLOG = getLoggers(__name__)
 
 
-LOGGER = logging.getLogger(__name__)
-
-
-def model_to_dismod_file(model):
+def model_to_dismod_file(model, execution_context):
     """
     This is a one-way translation from a model context to a new Dismod file.
     It assumes a lot. One location, no covariates, and more.
@@ -38,9 +37,10 @@ def model_to_dismod_file(model):
     # Standard integrand naming scheme.
     all_integrands = default_integrand_names()
     bundle_fit.integrand = all_integrands
+    bundle_fit.integrand["minimum_meas_cv"] = model.parameters.minimum_meas_cv
 
     bundle_fit.covariate = bundle_fit.empty_table("covariate")
-    LOGGER.debug(f"Covariate types {bundle_fit.covariate.dtypes}")
+    CODELOG.debug(f"Covariate types {bundle_fit.covariate.dtypes}")
 
     # Defaults, empty, b/c Brad makes them empty.
     bundle_fit.nslist = bundle_fit.empty_table("nslist")
@@ -49,7 +49,7 @@ def model_to_dismod_file(model):
 
     bundle_fit.log = make_log_table()
 
-    bundle_fit.node = make_node_table(model)
+    bundle_fit.node, location_to_node_func = make_node_table(execution_context)
 
     non_zero_rates = [rate.name for rate in model.rates if rate.parent_smooth or rate.child_smoothings]
     if "iota" in non_zero_rates:
@@ -69,7 +69,7 @@ def model_to_dismod_file(model):
         }
     )
 
-    bundle_fit.data = make_data_table(model)
+    bundle_fit.data = make_data_table(model, bundle_fit.node)
 
     # Include all data in the data_subset.
     bundle_fit.data_subset = pd.DataFrame({"data_id": np.arange(len(bundle_fit.data))})
@@ -92,18 +92,7 @@ def model_to_dismod_file(model):
 
     # Given average integrand cases by name, convert them to average integrand
     # cases by ID and save. Any covariates have to exist at this point.
-    avgint_named = model.input_data.average_integrand_cases
-    if avgint_named:
-        bundle_fit.avgint = pd.concat(
-            [avgint_named.drop(columns=["integrand_name"]), avgint_named["integrand_name"].apply(integrand_id_func)],
-            axis=1,
-            sort=False
-        )
-    else:
-        covariate_names = [cov_obj.name for cov_obj in model.input_data.covariates]
-        all_avgint_columns = ["integrand_id", "age_lower", "age_upper",
-                       "time_lower", "time_upper", "weight_id", "node_id"] + covariate_names
-        bundle_fit.avgint = pd.DataFrame([], columns=all_avgint_columns)
+    bundle_fit.avgint = make_avgint_table(model, integrand_id_func, location_to_node_func)
 
     bundle_fit.rate, rate_id_func = make_rate_table(model, smooth_id_func)
 
@@ -147,25 +136,39 @@ def make_log_table():
     )
 
 
-def make_node_table(context):
-    # Assume we have one location, so no parents.
-    # If we had a hierarchy, that would be used to determine parents.
-    if context.input_data.observations is not None and not context.input_data.observations.empty:
-        unique_locations = context.input_data.observations["location_id"].unique()
-        assert len(unique_locations) == 1
-    else:
-        warnings.warn("No observations in model, falling back to location_id in parameters")
-        unique_locations = np.array([context.parameters.location_id])
-
-    return pd.DataFrame({"node_name": unique_locations.astype(int).astype(str), "parent": np.array([np.NaN])})
+def rec_build_nodes_table(node, parent):
+    parent_id = parent.id if parent is not None else np.NaN
+    result = [{"node_name": node.info["location_name_short"], "c_location_id": node.id, "parent": parent_id}]
+    for child in node.level_n_descendants(1):
+        result += rec_build_nodes_table(child, node)
+    return result
 
 
-def make_data_table(context):
+def make_node_table(execution_context):
+    locations = get_location_hierarchy_from_gbd(execution_context)
+    table = pd.DataFrame(rec_build_nodes_table(locations.root, None), columns=["node_name", "parent", "c_location_id"])
+    table["node_id"] = table.index
+
+    def location_to_node_func(location_id):
+        if np.isnan(location_id):
+            return np.nan
+        return np.where(table.c_location_id == location_id)[0][0]
+
+    table["parent"] = table.parent.apply(location_to_node_func)
+
+    return table, location_to_node_func
+
+
+def make_data_table(context, node_table):
     total_data = []
     if context.input_data.observations is not None:
-        total_data.append(observations_to_data(context.input_data.observations))
+        # It's OK for observations to be None if we are running a prediction.
+        total_data.append(observations_to_data(context.input_data.observations, node_table))
     if context.input_data.constraints is not None:
-        total_data.append(observations_to_data(context.input_data.constraints, hold_out=1))
+        # While constraints are defined as smoothings on rates, these same
+        # data values are put into measurement data as hold-outs so that they
+        # can be visualized with the data and residuals.
+        total_data.append(observations_to_data(context.input_data.constraints, node_table, hold_out=1))
 
     if total_data:
         total_data = pd.concat(total_data, ignore_index=True)
@@ -200,14 +203,18 @@ def simplest_weight():
     return weight, weight_grid
 
 
-def observations_to_data(observations_df, hold_out=0):
+def observations_to_data(observations_df, node_table, hold_out=0):
     """Turn an internal format into a Dismod format."""
     # Don't make the data_name here because could convert multiple observations.
+    observations_df = observations_df.reset_index()
+    observations_df["node_id"] = observations_df.merge(node_table,
+                                                       left_on="node_id",
+                                                       right_on=node_table.c_location_id
+                                                       ).node_id
     return pd.DataFrame(
         {
             "integrand_id": observations_df["measure"].apply(lambda x: IntegrandEnum[x].value),
-            # Assumes one location_id.
-            "node_id": 0,
+            "node_id": observations_df.node_id,
             # Density is an Enum at this point.
             "density_id": observations_df["density"].apply(lambda x: x.value),
             # Translate weight from string
@@ -256,12 +263,11 @@ def collect_ages_or_times(context, to_collect="ages"):
                 value = smooth.grid.times
             values.extend(value)
 
-    for integrand in context.outputs.integrands:
-        if to_collect == "ages":
-            value = [age for ages in integrand.age_ranges or [] for age in ages]
-        else:
-            value = [time for times in integrand.time_ranges or [] for time in times]
-        values.extend(value)
+    if to_collect == "ages":
+        value = np.concatenate([context.average_integrand_cases.age_lower, context.average_integrand_cases.age_upper])
+    else:
+        value = np.concatenate([context.average_integrand_cases.time_lower, context.average_integrand_cases.time_upper])
+    values.extend(value)
 
     # Extreme values from the input data must also appear in the age/time table
     if to_collect == "ages" and context.input_data.ages:
@@ -300,30 +306,18 @@ def integrand_to_id(integrand):
     return IntegrandEnum[integrand].value
 
 
-def make_avgint_table(context, integrand_id_func):
-    rows = []
-    for integrand in context.outputs.integrands:
-        if integrand.age_ranges is not None and integrand.time_ranges is not None:
-            for age_lower, age_upper in integrand.age_ranges:
-                for time_lower, time_upper in integrand.time_ranges:
-                    for sex in [-0.5, 0.5]:
-                        rows.append(
-                            {
-                                "integrand_id": integrand_id_func(integrand.name),
-                                "age_lower": age_lower,
-                                "age_upper": age_upper,
-                                "time_lower": time_lower,
-                                "time_upper": time_upper,
-                                # Assuming using the first set of weights, which is constant.
-                                "weight_id": 0,
-                                # Assumes one location_id.
-                                "node_id": 0,
-                                "x_sex": sex,
-                            }
-                        )
-    return pd.DataFrame(
-        rows, columns=["integrand_id", "age_lower", "age_upper", "time_lower", "time_upper", "weight_id", "node_id", "x_sex"]
-    )
+def make_avgint_table(context, integrand_id_func, location_to_node_func):
+    if context.average_integrand_cases is not None:
+        df = context.average_integrand_cases.copy()
+        df["integrand_id"] = df.integrand_name.apply(integrand_id_func)
+        df["node_id"] = df.node_id.apply(location_to_node_func)
+        return df.drop(columns=["integrand_name"])
+    else:
+        covariate_names = [cov_obj.name for cov_obj in context.input_data.covariates]
+        all_avgint_columns = ["integrand_id", "age_lower", "age_upper",
+                              "time_lower", "time_upper", "weight_id",
+                              "node_id"] + covariate_names
+        return pd.DataFrame([], columns=all_avgint_columns)
 
 
 def _prior_row(prior):
@@ -442,15 +436,13 @@ def covariate_multiplier_iter(context):
         for rate_mul in rate.covariate_multipliers:
             yield rate_mul, "rate_value", rate
 
-    # β
-    for val_integrand in context.outputs.integrands:
-        for val_mul in val_integrand.value_covariate_multipliers:
-            yield val_mul, "meas_value", val_integrand
-
-    # γ
-    for std_integrand in context.outputs.integrands:
-        for std_mul in std_integrand.std_covariate_multipliers:
-            yield std_mul, "meas_std", std_integrand
+    for integrand in context.integrand_covariate_multipliers.values():
+        # β
+        for val_mul in integrand.value_covariate_multipliers:
+            yield val_mul, "meas_value", integrand
+        # γ
+        for std_mul in integrand.std_covariate_multipliers:
+            yield std_mul, "meas_std", integrand
 
 
 def smooth_iter(context):
@@ -592,6 +584,12 @@ def make_covariate_table(context, smooth_id_func, rate_id_func, integrand_id_fun
 
 
 def make_option_table(context):
-    options = {"rate_case": context.parameters.rate_case, "parent_node_id": "0"}
+    options = {
+        "rate_case": context.parameters.rate_case,
+        "parent_node_id": "0",
+        "print_level_fixed": "5",
+        "ode_step_size": "1",
+        "quasi_fixed": "false",
+    }
 
     return pd.DataFrame([{"option_name": k, "option_value": v} for k, v in sorted(options.items())])

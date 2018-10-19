@@ -1,4 +1,3 @@
-from copy import deepcopy
 import pytest
 
 import pandas as pd
@@ -11,9 +10,9 @@ from cascade.input_data.configuration.builder import (
     make_smooth,
     assign_covariates,
     create_covariate_multipliers,
-    make_average_integrand_cases,
 )
 from cascade.model import priors
+from cascade.testing_utilities import make_execution_context
 
 
 @pytest.fixture
@@ -22,6 +21,7 @@ def base_config():
         {
             "model": {
                 "modelable_entity_id": 12345,
+                "model_version_id": 0xdeadbeef,
                 "title": "Test Model",
                 "description": "Test Model Description",
                 "drill": "drill",
@@ -93,17 +93,6 @@ def test_initial_context_from_epiviz(base_config):
     assert mc.parameters.location_id == 123
 
 
-def test_make_avgint_table(base_config):
-    mc = initial_context_from_epiviz(base_config)
-    avgint_table = make_average_integrand_cases(mc)
-
-    for integrand in mc.outputs.integrands:
-        if integrand.age_ranges is not None:
-            rows = avgint_table.query("integrand_name == @integrand_name")
-            sex_cnt = 2
-            assert len(rows) == sex_cnt * len(integrand.age_ranges) * len(integrand.time_ranges)
-
-
 def test_make_smooth(base_config):
     smooth = make_smooth(base_config, base_config.rate[0])
 
@@ -125,8 +114,9 @@ def test_make_smooth(base_config):
 
 
 def test_fixed_effects_from_epiviz(base_config, ihme):
+    ec = make_execution_context(gbd_round_id=5)
     mc = initial_context_from_epiviz(base_config)
-    fixed_effects_from_epiviz(mc, base_config)
+    fixed_effects_from_epiviz(mc, ec, base_config)
     assert all([r.parent_smooth is None for r in [mc.rates.rho, mc.rates.pini, mc.rates.chi, mc.rates.omega]])
     assert mc.rates.iota.parent_smooth == make_smooth(base_config, base_config.rate[0])
 
@@ -149,10 +139,6 @@ def test_covariates_from_settings_logic(base_config, ihme):
     # Can get rid of ihme by stubbing retrieval of covariates.
     mc = initial_context_from_epiviz(base_config)
 
-    # These are enough to populate the avgint table.
-    mc.outputs.integrands.Sincidence.age_ranges = [(a, a + 5) for a in range(0, 95, 5)]
-    mc.outputs.integrands.Sincidence.time_ranges = [(y, y + 5) for y in range(1990, 2015, 5)]
-
     mc.input_data.observations = pd.DataFrame(dict(
         age_lower=[0, 10, 20, 50, 100],
         age_upper=[10, 20, 40, 70, 120],
@@ -165,7 +151,7 @@ def test_covariates_from_settings_logic(base_config, ihme):
     start = {
         "country_covariate_id": 26,
         "transformation": 0,
-        "measure_id": 41, # Sincidence
+        "measure_id": 41,  # Sincidence
         "mulcov_type": "rate_value",
         "age_grid": [0, 20, 40, 60, 80],
         "default": {
@@ -189,6 +175,7 @@ def test_covariates_from_settings_logic(base_config, ihme):
     }
     configuration.country_covariate = [start]
     assert configuration.model.default_time_grid
-
-    column_id_func = assign_covariates(mc, configuration)
+    ec = make_execution_context(gbd_round_id=5)
+    assert ec.parameters.gbd_round_id == 5
+    column_id_func = assign_covariates(mc, ec, configuration)
     create_covariate_multipliers(mc, configuration, column_id_func)

@@ -8,6 +8,7 @@ from cascade.core.context import ModelContext
 from cascade.model.grids import PriorGrid, AgeTimeGrid
 from cascade.model.rates import Smooth
 from cascade.model.priors import Gaussian, Uniform
+from cascade.testing_utilities import make_execution_context
 from cascade.model.covariates import Covariate, CovariateMultiplier
 from cascade.dismod.serialize import (
     model_to_dismod_file,
@@ -27,6 +28,30 @@ from cascade.dismod.db.wrapper import DismodFile, _get_engine
 from cascade.dismod.db.metadata import DensityEnum
 
 
+class LocationNode:
+    def __init__(self, name, location_id, children):
+        self.info = {"location_name_short": name}
+        self.id = location_id
+        self._children = children
+        self.root = None
+
+    def level_n_descendants(self, n):
+        assert n == 1, "Levels other than 1 not supported for this mock"
+        return self._children
+
+
+@pytest.fixture
+def mock_get_location_hierarchy_from_gbd(mocker):
+    get_location_hierarchy_from_gbd = mocker.patch("cascade.dismod.serialize.get_location_hierarchy_from_gbd")
+    the_uk = LocationNode("United Kingdom", 1004, [])
+    europe = LocationNode("Europe", 10, [the_uk])
+    earth = LocationNode("Earth", 42, [europe])
+    the_uk.root = earth
+    europe.root = earth
+    earth.root = earth
+    get_location_hierarchy_from_gbd.return_value = earth
+
+
 def make_data(integrands):
     ages = np.arange(0, 121, 5, dtype=float)
     times = np.arange(1980, 2016, 5, dtype=float)
@@ -34,7 +59,7 @@ def make_data(integrands):
     df = pd.DataFrame(index=df).reset_index()
     df["age_end"] = df.age_start + 5
     df["year_end"] = df.year_start + 5
-    df["location_id"] = 1
+    df["node_id"] = 1
     df["sex"] = "Both"
     df["density"] = DensityEnum.gaussian
     df["weight"] = "constant"
@@ -59,6 +84,7 @@ def constraints():
 def base_context(observations, constraints):
     context = ModelContext()
     context.parameters.rate_case = "iota_pos_rho_zero"
+    context.parameters.minimum_meas_cv = 0
 
     context.input_data.observations = observations
     context.input_data.constraints = constraints
@@ -85,14 +111,25 @@ def base_context(observations, constraints):
     smooth.d_time_priors = d_time
     context.rates.pini.parent_smooth = smooth
 
-    context.outputs.integrands.Sincidence.age_ranges = [(a, a + 5) for a in range(0, 95, 5)]
-    context.outputs.integrands.Sincidence.time_ranges = [(y, y + 5) for y in range(1990, 2015, 5)]
-
+    context.average_integrand_cases = pd.DataFrame(
+        [],
+        columns=[
+            "integrand_name",
+            "age_lower",
+            "age_upper",
+            "time_lower",
+            "time_upper",
+            "weight_id",
+            "node_id",
+            "x_sex",
+        ],
+    )
     return context
 
 
-def test_development_target(base_context):
-    dm = model_to_dismod_file(base_context)
+def test_development_target(base_context, mock_get_location_hierarchy_from_gbd):
+    ec = make_execution_context(location_id=180)
+    dm = model_to_dismod_file(base_context, ec)
     e = _get_engine(None)
     dm.engine = e
     dm.flush()
@@ -211,15 +248,19 @@ def test_make_smooth_and_smooth_grid_tables(base_context):
     assert set(smooth_table.index) == set(smooth_grid_table.smooth_id)
 
 
-def test_make_node_table(base_context):
-    node_table = make_node_table(base_context)
+def test_make_node_table(base_context, mock_get_location_hierarchy_from_gbd):
+    node_table, _ = make_node_table(base_context)
 
-    assert all(node_table.node_name == "1")
-    assert all(node_table.parent.isna())
+    expected = pd.DataFrame(
+        [["Earth", 0, np.nan, 42], ["Europe", 1, 0, 10], ["United Kingdom", 2, 1, 1004]],
+        columns=["node_name", "node_id", "parent", "c_location_id"],
+    )
+    assert_frame_equal(node_table, expected, check_like=True)
 
 
-def test_make_data_table(base_context):
-    data_table = make_data_table(base_context)
+def test_make_data_table(base_context, mock_get_location_hierarchy_from_gbd):
+    node_table, _ = make_node_table(base_context)
+    data_table = make_data_table(base_context, node_table)
 
     assert len(data_table) == len(base_context.input_data.observations) + len(base_context.input_data.constraints)
     assert len(data_table.query("hold_out==1")) == len(base_context.input_data.constraints)
@@ -273,8 +314,8 @@ def test_make_covariate_table(base_context):
     # There isn't much to test about the lists of covariate multipliers.
     # They are lists and would permit, for instance, adding the same one twice.
     base_context.rates.iota.covariate_multipliers.append(income_time_tight)
-    base_context.outputs.integrands.remission.value_covariate_multipliers.append(income_time_tight)
-    base_context.outputs.integrands.prevalence.std_covariate_multipliers.append(income_time_tight)
+    base_context.integrand_covariate_multipliers["remission"].value_covariate_multipliers.append(income_time_tight)
+    base_context.integrand_covariate_multipliers["prevalence"].std_covariate_multipliers.append(income_time_tight)
 
     for rate_adj in base_context.rates:
         rate_adj.covariate_multipliers.append(wash_cov)
