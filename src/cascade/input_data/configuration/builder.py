@@ -462,24 +462,35 @@ def select_interpolator_based_on_at_dims(covariates, covar_at_dims):
     # neither age nor time are single values for entire covariate data set
     if covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
+        covariates["avg_age"] = covariates[["age_lower", "age_upper"]].mean(axis=1)
+        covariates["avg_time"] = covariates[["time_lower", "time_upper"]].mean(axis=1)
+
+        covariates_sorted = covariates.sort_values(by=["avg_age", "avg_time"])
+
         interpolator = interpolate.interp2d(
-            covariates[["age_lower", "age_upper"]].mean(axis=1),
-            covariates[["time_lower", "time_upper"]].mean(axis=1),
-            covariates["mean_value"])
+            covariates_sorted["avg_age"], covariates_sorted["avg_time"], covariates_sorted["mean_value"])
 
     # time is a single value
     elif covar_at_dims["age_1d"] and not covar_at_dims["time_1d"]:
 
+        covariates["avg_age"] = covariates[["age_lower", "age_upper"]].mean(axis=1)
+
+        covariates_sorted = covariates.sort_values(by=["avg_age"])
+
         interpolator = interpolate.interp1d(
-            covariates[["age_lower", "age_upper"]].mean(axis=1),
-            covariates["mean_value"], bounds_error=False)
+            covariates_sorted["avg_age"],
+            covariates_sorted["mean_value"], bounds_error=False)
 
     # age is a single value
     elif not covar_at_dims["age_1d"] and covar_at_dims["time_1d"]:
 
+        covariates["avg_time"] = covariates[["time_lower", "time_upper"]].mean(axis=1)
+
+        covariates_sorted = covariates.sort_values(by=["avg_time"])
+
         interpolator = interpolate.interp1d(
-            covariates[["time_lower", "time_upper"]].mean(axis=1),
-            covariates["mean_value"], bounds_error=False)
+            covariates_sorted["avg_time"],
+            covariates_sorted["mean_value"], bounds_error=False)
 
     # both age and time have only one value for the entire covariate data set
     else:
